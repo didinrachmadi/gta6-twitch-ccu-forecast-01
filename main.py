@@ -28,11 +28,15 @@ target's hour-1 print:
     q_tau(h) = p1 * exp(mu_h + z_tau * sd_h)
 
 The spread is honest by construction: it is the actual cross-launch
-variability among launches of the target's size, not a guessed widening. A
-leave-one-out backtest over the 37 comparable launches in the kit scores this
-at a mean pinball loss of about 0.39, against about 0.93 for the flat
-persistence baseline on the same launches (and about 0.21 vs 0.26 on the
-large launches alone, the group GTA VI belongs to).
+variability among launches of the target's size, not a guessed widening,
+plus the sampling variance of the weighted mean itself (divided by the
+kernel weights' effective donor count), so the band widens exactly when
+few donors carry weight and the mean is least certain. A leave-one-out
+backtest over the 37 comparable launches in the kit scores this at a mean
+pinball loss of about 0.39, against about 0.93 for the flat persistence
+baseline on the same launches (and about 0.21 vs 0.26 on the large
+launches alone, the group GTA VI belongs to); its 90% band covers about
+0.905 of hours, close to the nominal 0.90.
 
 Only the standard library is used. There is no randomness anywhere, no
 network access, and every input is read in a fixed order, so two runs produce
@@ -107,11 +111,18 @@ def collect_donors(case: dict) -> list:
 
 
 def weighted_log_ratio_stats(donors, target_log_first, hour):
-    """Weighted mean and sd of log(viewers_h / viewers_1) across donors.
+    """Weighted mean and predictive sd of log(viewers_h / viewers_1).
 
     Returns (mu, sd) or None when no donor has a usable value for this hour.
+    The sd is the predictive spread, not just the cross-launch dispersion:
+    the weighted mean is itself estimated from the donors, so its sampling
+    variance (sd^2 / n_eff, with n_eff the effective donor count of the
+    kernel weights) is added to the dispersion. The correction is largest
+    exactly when few donors carry weight, i.e. when the mean is least
+    certain -- as for a target at the edge of the donor cloud.
     """
     total_weight = 0.0
+    weight_sq_sum = 0.0
     weighted_sum = 0.0
     points = []
     for donor_log_first, curve in donors:
@@ -124,12 +135,15 @@ def weighted_log_ratio_stats(donors, target_log_first, hour):
         log_ratio = math.log(value / first)
         points.append((log_ratio, weight))
         total_weight += weight
+        weight_sq_sum += weight * weight
         weighted_sum += weight * log_ratio
     if total_weight <= 0.0:
         return None
     mu = weighted_sum / total_weight
     variance = sum(w * (v - mu) ** 2 for v, w in points) / total_weight
-    return mu, math.sqrt(variance)
+    n_eff = total_weight * total_weight / weight_sq_sum
+    predictive_sd = math.sqrt(variance * (1.0 + 1.0 / n_eff))
+    return mu, predictive_sd
 
 
 def round_half_up(value: float) -> float:
